@@ -33,6 +33,7 @@ async def main():
     # === Меню команд ===
     commands =[
         BotCommand(command="start", description="Команды бота"),
+        BotCommand(command="all", description="Пинг всех"),
         BotCommand(command="dig", description="Копать картошку (КД)"),
         BotCommand(command="top", description="Топ богачей чата"),
         BotCommand(command="pvp", description="Дуэль (ставка)"),
