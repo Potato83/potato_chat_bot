@@ -8,7 +8,7 @@ from aiogram.types import BotCommand
 
 from database import init_db
 from handlers import admin, games, pve, pvp, common, shop
-#from middlewares import AntiSpamMiddleware
+from middlewares import AntiSpamMiddleware
 import config
 
 
@@ -51,7 +51,7 @@ async def main():
 
     dp = Dispatcher()
     
-#   dp.message.middleware(AntiSpamMiddleware())
+  dp.message.middleware(AntiSpamMiddleware())
 
     dp.include_routers(
         admin.router,
