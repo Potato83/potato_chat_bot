@@ -51,7 +51,7 @@ async def main():
 
     dp = Dispatcher()
     
-  dp.message.middleware(AntiSpamMiddleware())
+    dp.message.middleware(AntiSpamMiddleware())
 
     dp.include_routers(
         admin.router,
