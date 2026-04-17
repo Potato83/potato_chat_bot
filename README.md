@@ -1,1 +1,1 @@
-silly telegram bot
+silly telegram bot with minigames for chat
