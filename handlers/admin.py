@@ -191,3 +191,35 @@ async def admin_main(message: types.Message):
         parse_mode="HTML"
     )
 
+@router.message(Command("add"), F.reply_to_message)
+async def admin_add_potato(message: types.Message):
+    ADMIN_ID = config.MY_ID
+
+    if not ADMIN_ID or message.from_user.id != ADMIN_ID:
+        return
+        
+    args = message.text.split()
+    if len(args) < 2 or not args[1].lstrip('-').isdigit():
+        return await message.answer("Укажи сумму! Пример: /add 1000")
+        
+    amount = int(args[1])
+    target_id = message.reply_to_message.from_user.id
+    target_name = message.reply_to_message.from_user.full_name
+    chat_id = message.chat.id
+
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT amount FROM potatoes WHERE chat_id = ? AND user_id = ?", (chat_id, target_id))
+    row = cursor.fetchone()
+
+    if row:
+        cursor.execute("UPDATE potatoes SET amount = amount + ? WHERE chat_id = ? AND user_id = ?", (amount, chat_id, target_id))
+    else:
+        cursor.execute("INSERT INTO potatoes (chat_id, user_id, amount, last_dig_date) VALUES (?, ?, ?, 0)", (chat_id, target_id, amount))
+
+    conn.commit()
+    conn.close()
+
+    action = "выдал" if amount >= 0 else "забрал"
+    await message.answer(f"👑 Админ {action} {abs(amount)} 🥔 для {target_name}!")

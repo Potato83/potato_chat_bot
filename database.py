@@ -40,9 +40,13 @@ def save_user_data(chat_id, user_id, full_name, chat_title, chat_type):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     if user_id != 777000: 
-        cursor.execute("INSERT OR REPLACE INTO users (chat_id, user_id, full_name) VALUES (?, ?, ?)",
-                       (chat_id, user_id, full_name))
-    if chat_type in ["group", "supergroup"]:
+        cursor.execute("""
+            INSERT INTO users (chat_id, user_id, full_name) 
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id, user_id) DO UPDATE SET full_name = excluded.full_name
+        """, (chat_id, user_id, full_name))
+        
+    if chat_type in["group", "supergroup"]:
         cursor.execute("INSERT OR REPLACE INTO chats (chat_id, title) VALUES (?, ?)",
                        (chat_id, chat_title))
     conn.commit()

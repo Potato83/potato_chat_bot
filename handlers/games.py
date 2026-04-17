@@ -115,13 +115,3 @@ async def top_potatoes(message: types.Message):
         
     await message.answer(reply_text, parse_mode="Markdown")
 
-@router.message(Command("removetitle"))
-async def remove_user_title(message: types.Message):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET prefix = NULL WHERE chat_id = ? AND user_id = ?", 
-                   (message.chat.id, message.from_user.id))
-    conn.commit()
-    conn.close()
-    await message.answer("Титул успешно удален! Теперь ты обычный фермер.")
-    

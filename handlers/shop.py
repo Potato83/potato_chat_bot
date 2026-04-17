@@ -1,6 +1,7 @@
 import sqlite3
 import asyncio
 import time
+import random
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, types, F
@@ -147,6 +148,17 @@ async def set_user_title(message: types.Message):
     finally:
         conn.close()
 
+@router.message(Command("removetitle"))
+async def remove_user_title(message: types.Message):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET prefix = NULL WHERE chat_id = ? AND user_id = ?", 
+                   (message.chat.id, message.from_user.id))
+    conn.commit()
+    conn.close()
+    await message.answer("Титул успешно удален! Теперь ты обычный фермер.")
+    
+
 # --- Логика займов ---
 @router.message(Command("zaim"))
 async def take_loan(message: types.Message):
@@ -202,7 +214,7 @@ async def loan_timer(bot, chat_id, user_id, user_name):
             member = await bot.get_chat_member(chat_id, user_id)
             now = datetime.now(timezone.utc)
             # Если уже в муте - стакаем
-            new_until = (member.until_date if getattr(member, 'until_date', None) and member.until_date > now else now) + timedelta(minutes=10)
+            new_until = (member.until_date if getattr(member, 'until_date', None) and member.until_date > now else now) + timedelta(minutes=random.randint(300,1440))
             
             await bot.restrict_chat_member(
                 chat_id=chat_id,
