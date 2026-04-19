@@ -183,7 +183,7 @@ async def take_loan(message: types.Message):
     conn.commit()
     conn.close()
     
-    await message.answer(f"🏦 {message.from_user.full_name}, ты взял в долг 50 🥔!\nВерни через 30 минут, иначе получишь мут на 10 минут.")
+    await message.answer(f"🏦 {message.from_user.full_name}, ты взял в долг 50 🥔!\nВерни через 30 минут, иначе получишь от 5 до 24 часов.")
     
     # Запускаем таймер возврата в фоне
     asyncio.create_task(loan_timer(message.bot, chat_id, user_id, message.from_user.full_name))
@@ -214,7 +214,8 @@ async def loan_timer(bot, chat_id, user_id, user_name):
             member = await bot.get_chat_member(chat_id, user_id)
             now = datetime.now(timezone.utc)
             # Если уже в муте - стакаем
-            new_until = (member.until_date if getattr(member, 'until_date', None) and member.until_date > now else now) + timedelta(minutes=random.randint(300,1440))
+            time_mutes = random.randint(300,1440)
+            new_until = (member.until_date if getattr(member, 'until_date', None) and member.until_date > now else now) + timedelta(minutes=time_mutes)
             
             await bot.restrict_chat_member(
                 chat_id=chat_id,
@@ -222,6 +223,6 @@ async def loan_timer(bot, chat_id, user_id, user_name):
                 permissions=ChatPermissions(can_send_messages=False),
                 until_date=new_until
             )
-            await bot.send_message(chat_id, f"🚨 {user_name} не вернул долг вовремя! Наказание: мут на 10 минут.")
+            await bot.send_message(chat_id, f"🚨 {user_name} не вернул долг вовремя! Наказание: мут на {time_mutes} минут.")
         except Exception:
             await bot.send_message(chat_id, f"🚨 {user_name} не вернул долг, но замутить его не удалось (возможно, админ).")

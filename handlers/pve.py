@@ -227,6 +227,7 @@ async def start_blackjack(message: types.Message, state: FSMContext):
     p_score = get_card_value(player_hand)
 
     if p_score == 21:
+        bet = bet*1.5
         cursor.execute("UPDATE potatoes SET amount = amount + ?, games = games + 1, wins = wins + 1 WHERE chat_id = ? AND user_id = ?", (bet, message.chat.id, message.from_user.id))
         conn.commit()
         conn.close()

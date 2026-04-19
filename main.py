@@ -45,7 +45,7 @@ async def main():
         BotCommand(command="sleep", description="Усыпить игрока (мут)"),
         BotCommand(command="give", description="Передать картошку"),
         BotCommand(command="zaim", description="Взять в долг (50 🥔)"),
-        BotCommand(command="pidor", description="Пиздюк дня"),
+        BotCommand(command="pidor", description="pidor дня"),
     ]
     await bot.set_my_commands(commands)
 
