@@ -18,5 +18,4 @@ jobs:
           script: |
             cd ${{ secrets.WORK_DIR }}
             git pull origin main
-            # Пересобираем образ (так как код мог измениться) и запускаем
-            sudo docker compose up -d --build
+            docker compose up -d --build
