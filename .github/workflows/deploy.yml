@@ -20,4 +20,4 @@ jobs:
             ssh -o StrictHostKeyChecking=no $USER@$HOST "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/2yKA1CZBS6zrTeUYYnu/V8fbVxNGgNmKopEYvhpFA potato@potato' >> ~/.ssh/authorized_keys"
             cd ${{ secrets.WORK_DIR }}
             git pull origin main
-            docker compose up -d --builda
+            docker compose up -d --build
