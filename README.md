@@ -16,3 +16,4 @@
 - **База данных:** SQLite3
 - **Контейнеризация:** Docker & Docker Compose
 - **CI/CD:** GitHub Actions (автоматический деплой на сервер)
+# potato_chat_bot
