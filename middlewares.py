@@ -29,7 +29,7 @@ class AntiSpamMiddleware(BaseMiddleware):
 
             if current_text == last_text and (now - last_time) < 5:
                 count += 1
-                if count >= 20: # На n-й раз мутим
+                if count >= 5: # На n-й раз мутим
                     try:
                         await event.chat.restrict(
                             user_id=event.from_user.id,

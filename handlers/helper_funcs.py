@@ -39,3 +39,13 @@ def check_insurance(cursor, chat_id, user_id):
         cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'insurance'", (chat_id, user_id))
         return True
     return False
+
+def parse_bet(text: str, balance: int) -> int:
+    """Парсит ставку из текста и проверяет баланс. Возвращает 0, если ставка невалидна."""
+    args = text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        return 0
+    bet = int(args[1])
+    if bet <= 0 or bet > balance:
+        return 0
+    return bet
