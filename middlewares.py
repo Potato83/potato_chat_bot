@@ -39,7 +39,7 @@ class AntiSpamMiddleware(BaseMiddleware):
                         await event.answer("🔇 Хватит спамить! Отдохни 5 минут.")
                         del storage[user_key]
                         return
-                    except:
+                    except Exception:  # nosec B110
                         pass
             else:
                 count = 1

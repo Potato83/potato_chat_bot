@@ -207,7 +207,8 @@ async def loan_timer(bot, chat_id, user_id, user_name):
         conn.close()
         try:
             await bot.send_message(chat_id, f"🏦 Время вышло! {user_name} успешно погасил долг (50 🥔 списано).")
-        except: pass
+        except Exception:  # nosec B110
+            pass
     else:
         # Не вернул долг - списываем до нуля и даем мут
         cursor.execute("UPDATE potatoes SET amount = CASE WHEN amount < 50 THEN 0 ELSE amount - 50 END WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
