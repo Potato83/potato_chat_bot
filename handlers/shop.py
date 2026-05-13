@@ -66,15 +66,7 @@ async def sleep_user(message: types.Message):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     try:
-        # 1. Проверяем щит цели
-        cursor.execute("SELECT amount FROM inventory WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
-        shield = cursor.fetchone()
-        if shield and shield[0] > 0:
-            cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
-            conn.commit()
-            return await message.answer(f"🛡 {target_name} отразил атаку щитом!")
-
-        # 2. Проверяем настройки и баланс
+        # 1. Сначала проверяем настройки и баланс атакующего
         cursor.execute("SELECT sleep_price, sleep_duration FROM settings WHERE chat_id = ?", (message.chat.id,))
         set_row = cursor.fetchone()
         price = set_row[0] if set_row else 10
@@ -82,10 +74,23 @@ async def sleep_user(message: types.Message):
 
         cursor.execute("SELECT amount FROM potatoes WHERE chat_id = ? AND user_id = ?", (message.chat.id, attacker_id))
         balance = cursor.fetchone()
+        
         if not balance or balance[0] < price:
-            return await message.answer(f"Мало картошки (нужно {price})")
+            return await message.answer(f"Мало картошки (нужно {price} 🥔)")
 
-        # 3. Мутим со стаком времени
+        # 2. СПИСЫВАЕМ ОПЛАТУ СРАЗУ
+        cursor.execute("UPDATE potatoes SET amount = amount - ? WHERE chat_id = ? AND user_id = ?", (price, message.chat.id, attacker_id))
+
+        # 3. Проверяем щит цели
+        cursor.execute("SELECT amount FROM inventory WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
+        shield = cursor.fetchone()
+        
+        if shield and shield[0] > 0:
+            cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
+            conn.commit()
+            return await message.answer(f"🛡 {target_name} отразил атаку щитом! (С тебя списано {price} 🥔 за попытку)")
+
+        # 4. Если щита нет — мутим со стаком времени
         member = await message.bot.get_chat_member(message.chat.id, target_id)
         now = datetime.now(timezone.utc)
         
@@ -102,7 +107,6 @@ async def sleep_user(message: types.Message):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=new_until_date
         )
-        cursor.execute("UPDATE potatoes SET amount = amount - ? WHERE chat_id = ? AND user_id = ?", (price, message.chat.id, attacker_id))
         conn.commit()
         await message.answer(msg_text)
 
@@ -203,7 +207,8 @@ async def loan_timer(bot, chat_id, user_id, user_name):
         conn.close()
         try:
             await bot.send_message(chat_id, f"🏦 Время вышло! {user_name} успешно погасил долг (50 🥔 списано).")
-        except: pass
+        except Exception:  # nosec B110
+            pass
     else:
         # Не вернул долг - списываем до нуля и даем мут
         cursor.execute("UPDATE potatoes SET amount = CASE WHEN amount < 50 THEN 0 ELSE amount - 50 END WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))

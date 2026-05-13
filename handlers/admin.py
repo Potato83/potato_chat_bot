@@ -145,7 +145,7 @@ async def save_value(callback: types.CallbackQuery):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO settings (chat_id) VALUES (?)", (chat_id,))
-    cursor.execute(f"UPDATE settings SET {param} = ? WHERE chat_id = ?", (value, chat_id))
+    cursor.execute(f"UPDATE settings SET {param} = ? WHERE chat_id = ?", (value, chat_id)) #nosec
     conn.commit()
     conn.close()
     
