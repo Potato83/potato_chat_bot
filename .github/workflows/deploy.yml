@@ -20,7 +20,7 @@ jobs:
       - name: Run Security Check (Bandit)
         run: bandit -r . -x ./tests,./venv -s B311
       - name: Run Tests (Pytest)
-        run: pytest tests/
+        run: python -m pytest tests/
 
   deploy:
     runs-on: ubuntu-latest
