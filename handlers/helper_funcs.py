@@ -1,51 +1,61 @@
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from aiogram import types
-from datetime import timedelta
+
+import config
+
+MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
-# --- helper funcs ---
-# always mocsow time
-def get_moscow_today():
-    moscow_time = datetime.now(timezone.utc) + timedelta(hours=3)
-    return moscow_time.strftime("%Y-%m-%d")
+def get_moscow_today() -> str:
+    return datetime.now(MOSCOW_TIMEZONE).strftime("%Y-%m-%d")
 
-# smart id
-def get_user_info(msg: types.Message):
-    if msg.sender_chat:
-        return msg.sender_chat.id, msg.sender_chat.title
-    return msg.from_user.id, msg.from_user.first_name
 
-# black jack
-def get_card_value(hand):
+def get_user_info(message: types.Message) -> tuple[int, str]:
+    if message.sender_chat:
+        return message.sender_chat.id, message.sender_chat.title
+    if message.from_user:
+        return message.from_user.id, message.from_user.full_name
+    raise ValueError("message has no identifiable sender")
+
+
+def real_user_id(message: types.Message) -> int | None:
+    if message.sender_chat or not message.from_user or message.from_user.is_bot:
+        return None
+    return message.from_user.id
+
+
+def get_card_value(hand: list[str] | tuple[str, ...]) -> int:
     score = 0
     aces = 0
     for card in hand:
-        if card in ['J', 'Q', 'K']: score += 10
-        elif card == 'A': 
+        if card in {"J", "Q", "K"}:
+            score += 10
+        elif card == "A":
             aces += 1
             score += 11
-        else: score += int(card)
-        
+        else:
+            score += int(card)
+
     while score > 21 and aces:
         score -= 10
         aces -= 1
     return score
 
-# incurance
-def check_insurance(cursor, chat_id, user_id):
-    cursor.execute("SELECT amount FROM inventory WHERE chat_id = ? AND user_id = ? AND item_type = 'insurance'", (chat_id, user_id))
-    res = cursor.fetchone()
-    if res and res[0] > 0:
-        cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'insurance'", (chat_id, user_id))
-        return True
-    return False
 
 def parse_bet(text: str, balance: int) -> int:
-    """Парсит ставку из текста и проверяет баланс. Возвращает 0, если ставка невалидна."""
+    """Return a valid integer bet, or zero for malformed/unsafe input."""
     args = text.split()
     if len(args) < 2 or not args[1].isdigit():
         return 0
     bet = int(args[1])
-    if bet <= 0 or bet > balance:
+    if (
+        bet < config.MIN_BET
+        or bet > config.MAX_BET
+        or bet > balance
+    ):
         return 0
     return bet

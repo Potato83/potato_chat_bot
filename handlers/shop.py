@@ -1,233 +1,266 @@
-import sqlite3
+from __future__ import annotations
+
 import asyncio
+import logging
 import time
-import random
 from datetime import datetime, timedelta, timezone
 
-from aiogram import Router, types, F
+from aiogram import F, Router, html, types
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import ChatPermissions
 
-from handlers.helper_funcs import get_user_info
+from handlers.helper_funcs import real_user_id
+from services.economy import (
+    SHOP_CATALOG,
+    InsufficientFunds,
+    InvalidAmount,
+    ItemUnavailable,
+    charge_sleep,
+    get_sleep_duration,
+    purchase,
+    refund_sleep,
+    remove_title,
+    set_title,
+)
+from services.loans import (
+    LOAN_COOLDOWN_SECONDS,
+    LOAN_DUE_AMOUNT,
+    LOAN_PRINCIPAL,
+    LOAN_TERM_SECONDS,
+    issue_loan,
+)
 
 router = Router()
+logger = logging.getLogger(__name__)
 
-# Словарь для хранения кулдаунов займов (КД - 1 час)
-zaim_cooldowns = {}
 
-# --- buttons ---
 @router.callback_query(F.data.startswith("buy:"))
-async def buy_item(callback: types.CallbackQuery):
-    _, item_type, price = callback.data.split(":")
-    price = int(price)
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
-
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT amount FROM potatoes WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-    res = cursor.fetchone()
-    if not res or res[0] < price:
+async def buy_item(callback: types.CallbackQuery) -> None:
+    product_id = callback.data.split(":", 1)[1]
+    try:
+        title, price, balance = await asyncio.to_thread(
+            purchase,
+            callback.message.chat.id,
+            callback.from_user.id,
+            product_id,
+            operation_key=f"shop:{callback.id}",
+        )
+    except ItemUnavailable:
+        await callback.answer("Такого товара нет.", show_alert=True)
+        return
+    except InsufficientFunds:
         await callback.answer("У тебя мало картошки! 🥔", show_alert=True)
-        conn.close()
+        return
+    await callback.answer(
+        f"Куплено: {title} за {price} 🥔. Баланс: {balance} 🥔",
+        show_alert=True,
+    )
+
+
+@router.message(Command("shop"))
+async def open_shop(message: types.Message) -> None:
+    rows = []
+    for product_id, (title, price) in SHOP_CATALOG.items():
+        rows.append(
+            [
+                types.InlineKeyboardButton(
+                    text=f"{title} ({price} 🥔)",
+                    callback_data=f"buy:{product_id}",
+                )
+            ]
+        )
+    await message.answer(
+        "🛒 <b>Картофельная лавка</b>\n"
+        "Цена товара всегда проверяется на сервере:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("sleep"))
+async def sleep_user(message: types.Message) -> None:
+    attacker_id = real_user_id(message)
+    if attacker_id is None:
+        await message.answer("Команда доступна только обычным пользователям.")
+        return
+    if not message.reply_to_message:
+        await message.answer("Ответь на сообщение цели!")
+        return
+    target_id = real_user_id(message.reply_to_message)
+    if target_id is None:
+        await message.answer("Эту цель нельзя отправить спать.")
+        return
+    if target_id == attacker_id:
+        await message.answer("Себя отправить спать нельзя.")
         return
 
-    cursor.execute("UPDATE potatoes SET amount = amount - ? WHERE chat_id = ? AND user_id = ?", (price, chat_id, user_id))
-    
-    cursor.execute("""
-        INSERT INTO inventory (chat_id, user_id, item_type, amount) 
-        VALUES (?, ?, ?, 1)
-        ON CONFLICT(chat_id, user_id, item_type) DO UPDATE SET amount = amount + 1
-    """, (chat_id, user_id, item_type))
-    
-    conn.commit()
-    conn.close()
-    
-    await callback.answer(f"Успешно куплено: {item_type}! 🛍", show_alert=True)
-
-# --- handlers ---
-# shop
-@router.message(Command("shop"))
-async def open_shop(message: types.Message):
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🛡 Щит (50 🥔)", callback_data="buy:shield:50")],[types.InlineKeyboardButton(text="📜 Лицензия на титул (200 🥔)(/settitle)", callback_data="buy:title:200")],[types.InlineKeyboardButton(text="🛡 Страховка казино (100 🥔)", callback_data="buy:insurance:100")]
-    ])
-    await message.answer("🛒 <b>Картофельная лавка</b>\nТут можно потратить свои запасы:", reply_markup=kb, parse_mode="HTML")
-
-# mute someone
-@router.message(Command('sleep'))
-async def sleep_user(message: types.Message):
-    if not message.reply_to_message:
-        return await message.answer("Ответь на сообщение цели!")
-
-    attacker_id, attacker_name = get_user_info(message)
-    target_id, target_name = get_user_info(message.reply_to_message)
-
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
+    chat_id = message.chat.id
+    operation_key = f"sleep:{chat_id}:{message.message_id}"
     try:
-        # 1. Сначала проверяем настройки и баланс атакующего
-        cursor.execute("SELECT sleep_price, sleep_duration FROM settings WHERE chat_id = ?", (message.chat.id,))
-        set_row = cursor.fetchone()
-        price = set_row[0] if set_row else 10
-        duration = set_row[1] if set_row else 2
+        charge = await asyncio.to_thread(
+            charge_sleep,
+            chat_id,
+            attacker_id,
+            target_id,
+            operation_key=operation_key,
+        )
+    except InsufficientFunds as exc:
+        await message.answer(
+            f"Мало картошки: доступно {exc.balance}, нужно {exc.required} 🥔."
+        )
+        return
 
-        cursor.execute("SELECT amount FROM potatoes WHERE chat_id = ? AND user_id = ?", (message.chat.id, attacker_id))
-        balance = cursor.fetchone()
-        
-        if not balance or balance[0] < price:
-            return await message.answer(f"Мало картошки (нужно {price} 🥔)")
+    target_name = html.quote(message.reply_to_message.from_user.full_name)
+    if charge.shield_used:
+        await message.answer(
+            f"🛡 {target_name} отразил атаку щитом! "
+            f"За попытку списано {charge.price} 🥔.",
+            parse_mode="HTML",
+        )
+        return
 
-        # 2. СПИСЫВАЕМ ОПЛАТУ СРАЗУ
-        cursor.execute("UPDATE potatoes SET amount = amount - ? WHERE chat_id = ? AND user_id = ?", (price, message.chat.id, attacker_id))
-
-        # 3. Проверяем щит цели
-        cursor.execute("SELECT amount FROM inventory WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
-        shield = cursor.fetchone()
-        
-        if shield and shield[0] > 0:
-            cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'shield'", (message.chat.id, target_id))
-            conn.commit()
-            return await message.answer(f"🛡 {target_name} отразил атаку щитом! (С тебя списано {price} 🥔 за попытку)")
-
-        # 4. Если щита нет — мутим со стаком времени
-        member = await message.bot.get_chat_member(message.chat.id, target_id)
+    duration = await asyncio.to_thread(get_sleep_duration, chat_id)
+    restriction_applied = False
+    try:
+        member = await message.bot.get_chat_member(chat_id, target_id)
         now = datetime.now(timezone.utc)
-        
-        if getattr(member, 'until_date', None) and member.until_date > now:
-            new_until_date = member.until_date + timedelta(minutes=duration)
-            msg_text = f"💤 Сон продлен! {target_name} будет спать еще {duration} мин. (Цена: {price} 🥔)"
+        current_until = getattr(member, "until_date", None)
+        if current_until and current_until > now:
+            until_date = current_until + timedelta(minutes=duration)
+            text = (
+                f"💤 Сон продлён: {target_name} спит ещё {duration} мин. "
+                f"Цена: {charge.price} 🥔."
+            )
         else:
-            new_until_date = now + timedelta(minutes=duration)
-            msg_text = f"💤 {target_name} уснул на {duration} мин. (Цена: {price} 🥔)"
-
+            until_date = now + timedelta(minutes=duration)
+            text = (
+                f"💤 {target_name} уснул на {duration} мин. "
+                f"Цена: {charge.price} 🥔."
+            )
         await message.bot.restrict_chat_member(
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             user_id=target_id,
             permissions=ChatPermissions(can_send_messages=False),
-            until_date=new_until_date
+            until_date=until_date,
         )
-        conn.commit()
-        await message.answer(msg_text)
+        restriction_applied = True
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logger.warning(
+            "Sleep moderation failed",
+            extra={
+                "chat_id": chat_id,
+                "attacker_id": attacker_id,
+                "target_id": target_id,
+            },
+            exc_info=True,
+        )
+        await asyncio.to_thread(refund_sleep, chat_id, attacker_id, charge)
+        await message.answer(
+            "Не получилось ограничить пользователя. Оплата возвращена."
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Unexpected sleep command failure",
+            extra={
+                "chat_id": chat_id,
+                "attacker_id": attacker_id,
+                "target_id": target_id,
+            },
+        )
+        if not restriction_applied:
+            await asyncio.to_thread(refund_sleep, chat_id, attacker_id, charge)
+        await message.answer(
+            "Произошла внутренняя ошибка. "
+            + ("Ограничение уже применено." if restriction_applied else "Оплата возвращена.")
+        )
+        return
+    await message.answer(text, parse_mode="HTML")
 
-    except Exception as e:
-        await message.answer("Не вышло. Возможно, цель — админ.")
-    finally:
-        conn.close()
 
 @router.message(Command("settitle"))
-async def set_user_title(message: types.Message):
-    args = message.text.split(maxsplit=1)
+async def set_user_title(message: types.Message) -> None:
+    user_id = real_user_id(message)
+    if user_id is None:
+        await message.answer("Титулы доступны только обычным пользователям.")
+        return
+    args = message.text.split(maxsplit=1) if message.text else []
     if len(args) < 2:
-        return await message.answer("Использование: `/settitle Король` (до 15 символов)", parse_mode="Markdown")
-
-    new_prefix = args[1].strip()
-    
-    if len(new_prefix) > 15:
-        return await message.answer("⚠️ Титул слишком длинный! Максимум 15 символов.")
-
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    
+        await message.answer("Использование: /settitle Король (до 15 символов)")
+        return
+    new_title = args[1].strip()
     try:
-        cursor.execute("SELECT amount FROM inventory WHERE chat_id = ? AND user_id = ? AND item_type = 'title'", 
-                       (chat_id, user_id))
-        res = cursor.fetchone()
+        await asyncio.to_thread(
+            set_title,
+            message.chat.id,
+            user_id,
+            new_title,
+            operation_key=f"title:{message.chat.id}:{message.message_id}",
+        )
+    except InvalidAmount:
+        await message.answer(
+            "Титул должен содержать от 1 до 15 символов и быть в одну строку."
+        )
+        return
+    except ItemUnavailable:
+        await message.answer(
+            "❌ У тебя нет лицензии на титул. Купи её в /shop."
+        )
+        return
+    await message.answer(
+        f"✅ Новый титул установлен: <b>{html.quote(new_title)}</b>",
+        parse_mode="HTML",
+    )
 
-        if not res or res[0] <= 0:
-            return await message.answer("❌ У тебя нет Лицензии на титул! Купи её в /shop.")
-
-        cursor.execute("UPDATE inventory SET amount = amount - 1 WHERE chat_id = ? AND user_id = ? AND item_type = 'title'", 
-                       (chat_id, user_id))
-        
-        cursor.execute("UPDATE users SET prefix = ? WHERE chat_id = ? AND user_id = ?", 
-                       (f"[{new_prefix}]", chat_id, user_id))
-        
-        conn.commit()
-        await message.answer(f"✅ Твой новый титул установлен: **{new_prefix}**", parse_mode="Markdown")
-        
-    finally:
-        conn.close()
 
 @router.message(Command("removetitle"))
-async def remove_user_title(message: types.Message):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET prefix = NULL WHERE chat_id = ? AND user_id = ?", 
-                   (message.chat.id, message.from_user.id))
-    conn.commit()
-    conn.close()
-    await message.answer("Титул успешно удален! Теперь ты обычный фермер.")
-    
+async def remove_user_title(message: types.Message) -> None:
+    user_id = real_user_id(message)
+    if user_id is None:
+        await message.answer("Титулы доступны только обычным пользователям.")
+        return
+    await asyncio.to_thread(remove_title, message.chat.id, user_id)
+    await message.answer("Титул удалён. Теперь ты обычный фермер.")
 
-# --- Логика займов ---
+
 @router.message(Command("zaim"))
-async def take_loan(message: types.Message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-    key = (chat_id, user_id)
-    now = time.time()
-    
-    if key in zaim_cooldowns:
-        if now - zaim_cooldowns[key] < 3600:
-            rem = int(3600 - (now - zaim_cooldowns[key])) // 60
-            return await message.answer(f"🏦 КД на займ! Приходи через {rem} мин.")
-            
-    zaim_cooldowns[key] = now
-    
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    # Выдаем 50 картошек
-    cursor.execute("UPDATE potatoes SET amount = amount + 50 WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-    if cursor.rowcount == 0:
-        cursor.execute("INSERT INTO potatoes (chat_id, user_id, amount) VALUES (?, ?, 50)", (chat_id, user_id))
-    conn.commit()
-    conn.close()
-    
-    await message.answer(f"🏦 {message.from_user.full_name}, ты взял в долг 50 🥔!\nВерни через 30 минут, иначе получишь от 5 до 24 часов.")
-    
-    # Запускаем таймер возврата в фоне
-    asyncio.create_task(loan_timer(message.bot, chat_id, user_id, message.from_user.full_name))
+async def take_loan(message: types.Message) -> None:
+    user_id = real_user_id(message)
+    if user_id is None:
+        await message.answer("Займ доступен только обычным пользователям.")
+        return
+    decision = await asyncio.to_thread(
+        issue_loan,
+        message.chat.id,
+        user_id,
+    )
+    current_time = int(time.time())
 
-async def loan_timer(bot, chat_id, user_id, user_name):
-    await asyncio.sleep(1800) # Ждем 30 минут
-    
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT amount FROM potatoes WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-    row = cursor.fetchone()
-    
-    if row and row[0] >= 50:
-        # Успешное погашение
-        cursor.execute("UPDATE potatoes SET amount = amount - 50 WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-        conn.commit()
-        conn.close()
-        try:
-            await bot.send_message(chat_id, f"🏦 Время вышло! {user_name} успешно погасил долг (50 🥔 списано).")
-        except Exception:  # nosec B110
-            pass
-    else:
-        # Не вернул долг - списываем до нуля и даем мут
-        cursor.execute("UPDATE potatoes SET amount = CASE WHEN amount < 50 THEN 0 ELSE amount - 50 END WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-        conn.commit()
-        conn.close()
-        
-        try:
-            member = await bot.get_chat_member(chat_id, user_id)
-            now = datetime.now(timezone.utc)
-            # Если уже в муте - стакаем
-            time_mutes = random.randint(300,1440)
-            new_until = (member.until_date if getattr(member, 'until_date', None) and member.until_date > now else now) + timedelta(minutes=time_mutes)
-            
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=new_until
-            )
-            await bot.send_message(chat_id, f"🚨 {user_name} не вернул долг вовремя! Наказание: мут на {time_mutes} минут.")
-        except Exception:
-            await bot.send_message(chat_id, f"🚨 {user_name} не вернул долг, но замутить его не удалось (возможно, админ).")
+    if decision.status == "active":
+        await message.answer(
+            "🏦 У тебя уже есть активный займ. Списание через "
+            f"{decision.remaining_minutes(current_time)} мин."
+        )
+        return
+    if decision.status == "cooldown":
+        await message.answer(
+            "🏦 Таймер на займ ещё не закончился. Приходи через "
+            f"{decision.remaining_minutes(current_time)} мин."
+        )
+        return
+    if decision.status == "debt":
+        await message.answer(
+            f"🏦 Сначала погаси долг: баланс {decision.balance} 🥔."
+        )
+        return
+
+    await message.answer(
+        f"🏦 {html.quote(message.from_user.full_name)}, ты занял "
+        f"{LOAN_PRINCIPAL} 🥔.\n"
+        f"Через {LOAN_TERM_SECONDS // 60} минут автоматически спишется "
+        f"{LOAN_DUE_AMOUNT} 🥔 (+10%). Если картошки не хватит, баланс "
+        f"уйдёт в минус.\nНовый займ — не раньше чем через "
+        f"{LOAN_COOLDOWN_SECONDS // 60} минут после срока возврата.",
+        parse_mode="HTML",
+    )
